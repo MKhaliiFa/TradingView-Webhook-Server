@@ -1,127 +1,274 @@
 """
 main.py — TradingView Webhook Server (Flask)
 
-Receives authenticated POST signals from TradingView alerts and routes them
-to the exchange handler for execution.
+Receives authenticated POST signals from TradingView alerts, runs them through
+the exchange handler, and exposes a real-time Bootstrap dashboard at /.
 """
 
 import os
+import hmac
 import logging
-from flask import Flask, request, jsonify
-from exchange_handler import execute_trade
+import datetime
+from collections import deque
+from flask import Flask, request, jsonify, render_template
+
+from exchange_handler import execute_trade, TradeError
+
+# ---------------------------------------------------------------------------
+# In-memory log buffer (thread-safe circular queue, newest last)
+# ---------------------------------------------------------------------------
+MAX_LOG_ENTRIES = 200
+_log_buffer: deque = deque(maxlen=MAX_LOG_ENTRIES)
+
+LEVEL_COLORS = {
+    "INFO":    "success",
+    "WARNING": "warning",
+    "ERROR":   "danger",
+    "CRITICAL":"danger",
+    "DEBUG":   "secondary",
+}
+
+
+class BufferHandler(logging.Handler):
+    """Appends every log record to the in-memory deque for the /logs endpoint."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        ts = datetime.datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        _log_buffer.append({
+            "ts":      ts,
+            "level":   record.levelname,
+            "color":   LEVEL_COLORS.get(record.levelname, "secondary"),
+            "logger":  record.name,
+            "message": self.format(record),
+        })
+
 
 # ---------------------------------------------------------------------------
 # Logging configuration
 # ---------------------------------------------------------------------------
-# Use a structured format that includes timestamp, level, and module name.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+_fmt = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_fmt)
+
+_buffer_handler = BufferHandler()
+_buffer_handler.setFormatter(_fmt)
+
+logging.basicConfig(handlers=[_console_handler, _buffer_handler], level=logging.INFO)
 logger = logging.getLogger("webhook_server")
 
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
-app = Flask(__name__)
+# Locate templates relative to this file so the server works regardless of
+# the current working directory.
+_here = os.path.dirname(os.path.abspath(__file__))
+app = Flask(__name__, template_folder=os.path.join(_here, "templates"))
 
-# Load the shared secret from the environment.  The server will refuse to
-# start if this variable is not set so that misconfiguration is caught early.
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+# Load and validate the shared secret at startup — fail fast if missing.
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "").strip()
 if not WEBHOOK_SECRET:
     raise EnvironmentError(
         "WEBHOOK_SECRET environment variable is not set. "
         "Add it via the Replit Secrets tab before starting the server."
     )
 
+# Record startup time for uptime display on the dashboard.
+_start_time: datetime.datetime = datetime.datetime.utcnow()
+
+logger.info("Webhook server initialised. Secret loaded, ready to accept signals.")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _uptime() -> str:
+    """Return a human-readable uptime string."""
+    delta = datetime.datetime.utcnow() - _start_time
+    total_seconds = int(delta.total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}h {minutes}m {seconds}s"
+
+
+def _secure_compare(a: str, b: str) -> bool:
+    """
+    Constant-time string comparison to prevent timing-based token discovery.
+    Uses hmac.compare_digest which is immune to short-circuit evaluation.
+    """
+    return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Dashboard — root route
+# ---------------------------------------------------------------------------
+
+@app.route("/", methods=["GET"])
+def dashboard():
+    """Render the Bootstrap status dashboard."""
+    return render_template(
+        "dashboard.html",
+        uptime=_uptime(),
+        start_time=_start_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        log_count=len(_log_buffer),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Live logs API — polled by dashboard JavaScript
+# ---------------------------------------------------------------------------
+
+@app.route("/logs", methods=["GET"])
+def logs():
+    """
+    Return recent log entries as JSON for the dashboard live-log panel.
+    Query params:
+      ?since=<index>  — return only entries newer than this zero-based index
+    """
+    try:
+        since = int(request.args.get("since", 0))
+    except (ValueError, TypeError):
+        since = 0
+
+    entries = list(_log_buffer)
+    new_entries = entries[since:]
+    return jsonify({
+        "total": len(entries),
+        "entries": new_entries,
+    }), 200
+
 
 # ---------------------------------------------------------------------------
 # Health-check endpoint
 # ---------------------------------------------------------------------------
+
 @app.route("/health", methods=["GET"])
 def health():
-    """Simple liveness probe — no auth required."""
-    return jsonify({"status": "ok"}), 200
+    """Liveness probe — returns server status and uptime. No auth required."""
+    return jsonify({
+        "status":     "ok",
+        "uptime":     _uptime(),
+        "start_time": _start_time.isoformat() + "Z",
+    }), 200
 
 
 # ---------------------------------------------------------------------------
 # Webhook endpoint
 # ---------------------------------------------------------------------------
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """
     Accepts a JSON payload from a TradingView alert and executes the trade.
 
-    Expected payload shape:
+    Expected payload:
         {
-            "token":  "<your-secret-token>",   # OR supply via X-TV-Token header
+            "token":  "<secret>",      # OR via X-TV-Token header (header wins)
             "action": "buy" | "sell",
             "symbol": "BTCUSDT",
             "price":  "65000"
         }
 
-    Authentication:
-        The secret token may be supplied in two ways (header takes priority):
-          1. HTTP header  — X-TV-Token: <secret>
-          2. JSON field   — "token": "<secret>"
-
-    Returns HTTP 200 on success, 400/401/500 otherwise.
+    HTTP responses:
+        200 — signal accepted and processed
+        400 — malformed JSON or missing required fields
+        401 — invalid or missing authentication token
+        405 — wrong HTTP method (handled by Flask automatically)
+        500 — unexpected error during trade execution
     """
-    # --- 1. Parse JSON body ---------------------------------------------------
+    # ── 1. Parse body ────────────────────────────────────────────────────────
     payload = request.get_json(silent=True)
-    if payload is None:
-        logger.warning("Received webhook with non-JSON or empty body.")
-        return jsonify({"error": "Request body must be valid JSON."}), 400
+    if not isinstance(payload, dict):
+        logger.warning(
+            "Rejected webhook — non-JSON or empty body from IP: %s",
+            request.remote_addr,
+        )
+        return jsonify({"error": "Request body must be a valid JSON object."}), 400
 
-    logger.info(
-        "Incoming webhook — IP: %s  symbol: %s  action: %s  price: %s",
-        request.remote_addr,
-        payload.get("symbol", "<missing>"),
-        payload.get("action", "<missing>"),
-        payload.get("price", "<missing>"),
-    )
+    # ── 2. Authenticate — constant-time comparison ───────────────────────────
+    # Header takes priority; fall back to body field so both work with TradingView.
+    provided_token = (request.headers.get("X-TV-Token") or payload.get("token", "")).strip()
 
-    # --- 2. Authenticate ------------------------------------------------------
-    # Header takes priority over body field.
-    provided_token = request.headers.get("X-TV-Token") or payload.get("token")
-
-    if not provided_token or provided_token != WEBHOOK_SECRET:
+    if not provided_token or not _secure_compare(provided_token, WEBHOOK_SECRET):
         logger.warning(
             "Authentication FAILED — invalid or missing token from IP: %s",
             request.remote_addr,
         )
         return jsonify({"error": "Unauthorized: invalid or missing token."}), 401
 
-    # --- 3. Validate required fields ------------------------------------------
+    # ── 3. Log after auth so unauthenticated noise is not polluted ────────────
     action = payload.get("action")
     symbol = payload.get("symbol")
-    price = payload.get("price")
+    price  = payload.get("price")
 
-    missing = [f for f, v in [("action", action), ("symbol", symbol), ("price", price)] if not v]
+    logger.info(
+        "Signal received — IP: %s  action: %s  symbol: %s  price: %s",
+        request.remote_addr, action, symbol, price,
+    )
+
+    # ── 4. Validate required fields ──────────────────────────────────────────
+    # Use `is None` (not falsy) so that a price of "0" is not rejected.
+    missing = [
+        name for name, val in [("action", action), ("symbol", symbol), ("price", price)]
+        if val is None
+    ]
     if missing:
         logger.warning("Webhook rejected — missing fields: %s", missing)
         return jsonify({"error": f"Missing required fields: {missing}"}), 400
 
-    # --- 4. Delegate to exchange handler --------------------------------------
-    logger.info(
-        "Signal authenticated — executing trade: action=%s  symbol=%s  price=%s",
-        action,
-        symbol,
-        price,
-    )
+    # Validate action value
+    if str(action).lower() not in ("buy", "sell"):
+        logger.warning("Webhook rejected — invalid action value: %s", action)
+        return jsonify({"error": "Field 'action' must be 'buy' or 'sell'."}), 400
 
-    result = execute_trade(action=action, symbol=symbol, price=price)
+    # ── 5. Execute trade ─────────────────────────────────────────────────────
+    try:
+        logger.info(
+            "Executing trade — action: %s  symbol: %s  price: %s",
+            action, symbol, price,
+        )
+        result = execute_trade(
+            action=str(action).lower(),
+            symbol=str(symbol),
+            price=str(price),
+        )
+        logger.info("Trade execution result: %s", result)
+        return jsonify({"status": "success", "result": result}), 200
 
-    logger.info("Trade execution result: %s", result)
-    return jsonify({"status": "success", "result": result}), 200
+    except TradeError as exc:
+        # Known, structured error from the exchange handler
+        logger.error("Trade execution failed (TradeError): %s", exc)
+        return jsonify({"error": str(exc)}), 422
+
+    except Exception as exc:
+        # Unexpected error — log with full traceback, return safe 500
+        logger.error("Unexpected error during trade execution: %s", exc, exc_info=True)
+        return jsonify({"error": "Internal server error. Check server logs."}), 500
+
+
+# ---------------------------------------------------------------------------
+# Generic 404 / 405 JSON handlers
+# ---------------------------------------------------------------------------
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "Not found."}), 404
+
+
+@app.errorhandler(405)
+def method_not_allowed(e):
+    return jsonify({"error": "Method not allowed."}), 405
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     logger.info("Starting TradingView webhook server on port %d …", port)
-    # debug=False is mandatory in production.
     app.run(host="0.0.0.0", port=port, debug=False)

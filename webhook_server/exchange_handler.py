@@ -1,36 +1,88 @@
 """
 exchange_handler.py — Exchange Integration Module
 
-Provides the execute_trade() function that will be wired to a real CCXT-based
-exchange (e.g. Binance, Bybit, OKX) once you supply API credentials.
-
-All actual exchange communication will happen here, keeping main.py clean and
-focused solely on HTTP request handling.
+Provides execute_trade() and the TradeError sentinel exception.
+Switch from simulation mode to live trading by uncommenting the ccxt block
+and supplying EXCHANGE_API_KEY / EXCHANGE_API_SECRET via Replit Secrets.
 """
 
+import os
+import re
 import logging
 
-# Module-level logger — inherits the root configuration set in main.py.
 logger = logging.getLogger("exchange_handler")
 
 # ---------------------------------------------------------------------------
-# Optional: import ccxt when real trading is enabled
+# Custom exception — lets main.py distinguish known trade failures from bugs
 # ---------------------------------------------------------------------------
-# Uncomment the lines below and fill in your API credentials (via environment
-# variables) to connect to a live or paper-trading exchange.
+
+class TradeError(Exception):
+    """Raised for known, recoverable exchange-side errors."""
+
+
+# ---------------------------------------------------------------------------
+# Optional: ccxt exchange setup
+# ---------------------------------------------------------------------------
+# Uncomment and configure to connect to a live or testnet exchange.
 #
-# import os
 # import ccxt
 #
 # exchange = ccxt.binance({
 #     "apiKey":  os.environ.get("EXCHANGE_API_KEY"),
 #     "secret":  os.environ.get("EXCHANGE_API_SECRET"),
 #     "options": {"defaultType": "future"},   # "spot" | "future" | "margin"
-#     # Remove the next two lines to trade on the LIVE exchange:
-#     "urls": {"api": {"public":  "https://testnet.binance.vision/api",
-#                      "private": "https://testnet.binance.vision/api"}},
+#     # Testnet — remove both 'urls' lines to trade on the live exchange:
+#     "urls": {
+#         "api": {
+#             "public":  "https://testnet.binance.vision/api",
+#             "private": "https://testnet.binance.vision/api",
+#         }
+#     },
 # })
 
+
+# ---------------------------------------------------------------------------
+# Symbol normalisation
+# ---------------------------------------------------------------------------
+
+# Common quote currencies ordered longest-first so greedy matching works.
+_KNOWN_QUOTES = ["USDT", "USDC", "BUSD", "TUSD", "FDUSD", "BTC", "ETH", "BNB"]
+
+_SLASH_RE = re.compile(r"^[A-Z0-9]+/[A-Z0-9]+$")
+
+
+def _normalise_symbol(symbol: str) -> str:
+    """
+    Convert exchange-specific symbol strings to the universal CCXT slash format.
+
+    Examples
+    --------
+    "BTCUSDT"   → "BTC/USDT"
+    "ETHBTC"    → "ETH/BTC"
+    "LINKUSDT"  → "LINK/USDT"
+    "SOL/USDT"  → "SOL/USDT"   (already normalised — passed through)
+    "DOGEBUSD"  → "DOGE/BUSD"
+    """
+    symbol = symbol.strip().upper()
+
+    # Already in slash format
+    if _SLASH_RE.match(symbol):
+        return symbol
+
+    # Try to split by known quote currency (longest match first)
+    for quote in _KNOWN_QUOTES:
+        if symbol.endswith(quote) and len(symbol) > len(quote):
+            base = symbol[: -len(quote)]
+            return f"{base}/{quote}"
+
+    # Unknown quote currency — return as-is and let the exchange reject it
+    logger.warning("Could not normalise symbol '%s'; passing through unchanged.", symbol)
+    return symbol
+
+
+# ---------------------------------------------------------------------------
+# Main trade function
+# ---------------------------------------------------------------------------
 
 def execute_trade(action: str, symbol: str, price: str) -> dict:
     """
@@ -39,80 +91,81 @@ def execute_trade(action: str, symbol: str, price: str) -> dict:
     Parameters
     ----------
     action : str
-        Direction of the trade — ``"buy"`` or ``"sell"``.
+        Direction of the trade — ``"buy"`` or ``"sell"`` (already normalised
+        to lower-case by main.py).
     symbol : str
-        Market symbol in CCXT format, e.g. ``"BTC/USDT"`` or ``"BTCUSDT"``.
+        Market symbol, e.g. ``"BTCUSDT"``, ``"BTC/USDT"``, ``"LINKUSDT"``.
     price : str
-        Reference price from the TradingView alert (used for logging / limit
-        orders).  Passed as a string because TradingView always sends strings.
+        Reference price string from TradingView (used for logging and limit
+        orders). TradingView always sends numeric values as strings.
 
     Returns
     -------
     dict
-        A structured result dictionary describing the outcome of the attempt.
-        When live trading is enabled the ``order`` key will contain the full
-        CCXT order object returned by the exchange.
+        Structured result dict.  When live trading is active the ``order`` key
+        contains the full CCXT order object returned by the exchange.
 
-    Notes
-    -----
-    The function currently runs in **placeholder / simulation mode**.
-    Replace the body of the ``try`` block below with real CCXT calls once you
-    are ready to go live.
-
-    Example live market order (uncomment after setting up ccxt above):
-
-        order = exchange.create_order(
-            symbol=symbol,
-            type="market",
-            side=action,          # "buy" | "sell"
-            amount=0.001,         # quantity — read from env / config in prod
-        )
-        return {"status": "filled", "order": order}
+    Raises
+    ------
+    TradeError
+        For known, recoverable errors (bad symbol, insufficient funds, etc.).
+    Exception
+        For unexpected infrastructure failures — re-raised so main.py can log
+        and return HTTP 500.
     """
-
     logger.info(
         "execute_trade called — action=%s  symbol=%s  price=%s",
-        action,
-        symbol,
-        price,
+        action, symbol, price,
     )
 
-    try:
-        # ------------------------------------------------------------------
-        # PLACEHOLDER — replace with real CCXT order logic
-        # ------------------------------------------------------------------
-        # Normalise the symbol to the CCXT slash format if needed
-        normalised_symbol = symbol if "/" in symbol else f"{symbol[:3]}/{symbol[3:]}"
+    normalised = _normalise_symbol(symbol)
 
+    # Validate price is numeric before any exchange call
+    try:
+        price_float = float(price)
+    except (ValueError, TypeError) as exc:
+        raise TradeError(f"Invalid price value '{price}': must be numeric.") from exc
+
+    try:
+        # ──────────────────────────────────────────────────────────────────────
+        # SIMULATION MODE — replace this block with real CCXT calls when ready.
+        # ──────────────────────────────────────────────────────────────────────
         logger.info(
-            "Simulating %s order for %s at reference price %s",
-            action.upper(),
-            normalised_symbol,
-            price,
+            "Simulating %s order — symbol: %s  price: %s",
+            action.upper(), normalised, price,
         )
 
-        # Simulated response matching the shape of a real CCXT order object
         simulated_order = {
-            "id": "SIM-000001",
-            "symbol": normalised_symbol,
-            "side": action,
-            "type": "market",
-            "price": float(price),
-            "amount": 0.001,          # placeholder quantity
+            "id":     "SIM-000001",
+            "symbol": normalised,
+            "side":   action,
+            "type":   "market",
+            "price":  price_float,
+            "amount": 0.001,
             "status": "simulated",
         }
 
-        logger.info("Simulated order created: %s", simulated_order)
+        logger.info("Simulated order: %s", simulated_order)
         return {"status": "simulated", "order": simulated_order}
 
+        # ──────────────────────────────────────────────────────────────────────
+        # LIVE MODE — uncomment after configuring ccxt at the top of this file.
+        # ──────────────────────────────────────────────────────────────────────
+        # order = exchange.create_order(
+        #     symbol=normalised,
+        #     type="market",
+        #     side=action,
+        #     amount=float(os.environ.get("TRADE_AMOUNT", "0.001")),
+        # )
+        # return {"status": "filled", "order": order}
+
+    except TradeError:
+        raise  # Already structured — let main.py handle it
+
     except Exception as exc:
-        # Log the full exception and propagate a structured error upward so
-        # main.py can return a meaningful HTTP 500 response if needed.
         logger.error(
             "execute_trade FAILED — action=%s  symbol=%s  error=%s",
-            action,
-            symbol,
-            str(exc),
+            action, normalised, exc,
             exc_info=True,
         )
         raise
