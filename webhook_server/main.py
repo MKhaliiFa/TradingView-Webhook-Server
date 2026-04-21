@@ -51,6 +51,19 @@ _fmt = logging.Formatter(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
+# Suppress noisy polling routes from appearing in the dashboard and console.
+# werkzeug access log lines look like: ... "GET /logs?since=5 HTTP/1.1" 200 -
+_MUTED_PATTERNS = ('"GET /logs', '"GET /health', '"GET /favicon.ico')
+
+
+class _MutePollingFilter(logging.Filter):
+    """Drop werkzeug access-log entries for polling and housekeeping routes."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(pat in msg for pat in _MUTED_PATTERNS)
+
+
 _console_handler = logging.StreamHandler()
 _console_handler.setFormatter(_fmt)
 
@@ -59,6 +72,10 @@ _buffer_handler.setFormatter(_fmt)
 
 logging.basicConfig(handlers=[_console_handler, _buffer_handler], level=logging.INFO)
 logger = logging.getLogger("webhook_server")
+
+# Apply the filter to the werkzeug access logger specifically, so it only
+# suppresses HTTP access lines — not application-level werkzeug warnings.
+logging.getLogger("werkzeug").addFilter(_MutePollingFilter())
 
 # ---------------------------------------------------------------------------
 # App setup
