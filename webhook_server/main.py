@@ -269,6 +269,9 @@ def method_not_allowed(e):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    logger.info("Starting TradingView webhook server on port %d …", port)
+    # PORT is set dynamically by Replit in production (defaults to 8080).
+    # The development workflow passes PORT=5000 explicitly so Flask
+    # does not conflict with the Express proxy server on 8080.
+    port = int(os.environ.get("PORT", 8080))
+    logger.info("Starting TradingView webhook server on host=0.0.0.0 port=%d …", port)
     app.run(host="0.0.0.0", port=port, debug=False)
