@@ -25,3 +25,17 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `pnpm --filter @workspace/api-server run dev` — run API server locally
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
+
+## TradingView Webhook Server (`webhook_server/`)
+
+A standalone Python 3.11 Flask server for receiving automated crypto trading signals from TradingView.
+
+- **Entry point**: `webhook_server/main.py` — runs on port 5000
+- **Exchange logic**: `webhook_server/exchange_handler.py` — placeholder with CCXT structure
+- **Dependencies**: `webhook_server/requirements.txt` (Flask, ccxt, python-dotenv)
+- **Workflow**: "TradingView Webhook Server" (`python main.py`)
+- **Secret**: `WEBHOOK_SECRET` env var (set in Replit Secrets)
+- **Auth**: token supplied via `X-TV-Token` header or `"token"` JSON field
+- **Endpoints**:
+  - `GET /health` — liveness probe
+  - `POST /webhook` — receives TradingView alert JSON `{action, symbol, price}`
