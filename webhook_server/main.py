@@ -10,7 +10,7 @@ import hmac
 import logging
 import datetime
 from collections import deque
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, Response
 
 from exchange_handler import execute_trade, TradeError
 
@@ -116,6 +116,24 @@ def dashboard():
         start_time=_start_time.strftime("%Y-%m-%d %H:%M:%S UTC"),
         log_count=len(_log_buffer),
     )
+
+
+# ---------------------------------------------------------------------------
+# Favicon — served inline as a tiny SVG to suppress 404 log noise
+# ---------------------------------------------------------------------------
+
+_FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">'
+    '<rect width="16" height="16" rx="3" fill="#26a69a"/>'
+    '<path d="M3 8 L6 5 L8 10 L10 6 L13 8" stroke="#fff" stroke-width="1.5"'
+    ' fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    '</svg>'
+)
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return Response(_FAVICON_SVG, mimetype="image/svg+xml")
 
 
 # ---------------------------------------------------------------------------

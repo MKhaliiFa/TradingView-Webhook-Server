@@ -257,78 +257,117 @@
           <!-- Step list -->
           <div class="d-flex flex-column gap-0">
 
+            <!-- Step 1 -->
             <div class="d-flex gap-3 align-items-start">
               <div class="d-flex flex-column align-items-center">
                 <div class="step-num">1</div>
                 <div class="step-connector" style="height:2.2rem"></div>
               </div>
               <div class="pb-3">
-                <div class="fw-semibold mb-1">Open an Alert on TradingView</div>
+                <div class="fw-semibold mb-1">Create an Alert on TradingView</div>
                 <div class="text-secondary small">
-                  On your chart, click <strong>Alerts → Create alert</strong> and configure your
-                  trigger condition (indicator crossing, price level, etc.).
+                  On your chart, click <strong>Alerts → Create alert</strong>.
+                  Configure your trigger condition (indicator signal, price level crossing, etc.).
+                  Under <em>Alert actions</em>, choose <strong>Webhook URL</strong>.
                 </div>
               </div>
             </div>
 
+            <!-- Step 2 -->
             <div class="d-flex gap-3 align-items-start">
               <div class="d-flex flex-column align-items-center">
                 <div class="step-num">2</div>
                 <div class="step-connector" style="height:2.2rem"></div>
               </div>
               <div class="pb-3">
-                <div class="fw-semibold mb-1">Set the Notification URL</div>
-                <div class="text-secondary small">
-                  In the <em>Notifications</em> tab, enable <strong>Webhook URL</strong> and paste
-                  your server's webhook endpoint:
+                <div class="fw-semibold mb-1">Paste the Webhook URL</div>
+                <div class="text-secondary small mb-1">
+                  Copy this URL exactly and paste it into the <em>Webhook URL</em> field:
                 </div>
-                <div class="code-block mt-2" id="webhook-url">https://your-replit-domain/webhook</div>
+                <div class="code-block position-relative" id="webhook-url" style="cursor:pointer" onclick="copyWebhookUrl()" title="Click to copy">
+                  <span id="webhook-url-text">https://your-domain/webhook</span>
+                  <span class="float-end text-secondary" style="font-size:.7rem" id="copy-hint">click to copy</span>
+                </div>
               </div>
             </div>
 
+            <!-- Step 3 -->
             <div class="d-flex gap-3 align-items-start">
               <div class="d-flex flex-column align-items-center">
                 <div class="step-num">3</div>
-                <div class="step-connector" style="height:2.2rem"></div>
+                <div class="step-connector" style="height:2.5rem"></div>
               </div>
               <div class="pb-3">
-                <div class="fw-semibold mb-1">Set the Message Body</div>
-                <div class="text-secondary small">In the <em>Message</em> field, paste this JSON:</div>
-                <div class="code-block mt-2">{% raw %}{
+                <div class="fw-semibold mb-1">Set the Message Body (Indicator setup)</div>
+                <div class="text-secondary small mb-2">
+                  Since this is an <strong>Indicator alert</strong>, hardcode
+                  <code class="text-warning">buy</code> or <code class="text-warning">sell</code>
+                  directly — <em>do not</em> use <code>&#123;&#123;strategy.order.action&#125;&#125;</code>
+                  (that is for Strategy scripts only).
+                </div>
+                <!-- BUY alert -->
+                <div class="text-secondary small mb-1"><i class="bi bi-arrow-up-circle text-success me-1"></i>BUY alert message:</div>
+                <div class="code-block mb-2">{% raw %}{
   "token":  "YOUR_WEBHOOK_SECRET",
-  "action": "{{strategy.order.action}}",
+  "action": "buy",
+  "symbol": "{{ticker}}",
+  "price":  "{{close}}"
+}{% endraw %}</div>
+                <!-- SELL alert -->
+                <div class="text-secondary small mb-1"><i class="bi bi-arrow-down-circle text-danger me-1"></i>SELL alert message:</div>
+                <div class="code-block">{% raw %}{
+  "token":  "YOUR_WEBHOOK_SECRET",
+  "action": "sell",
   "symbol": "{{ticker}}",
   "price":  "{{close}}"
 }{% endraw %}</div>
               </div>
             </div>
 
+            <!-- Step 4 — quotes warning -->
             <div class="d-flex gap-3 align-items-start">
               <div class="d-flex flex-column align-items-center">
                 <div class="step-num">4</div>
+                <div class="step-connector" style="height:2.2rem"></div>
+              </div>
+              <div class="pb-3">
+                <div class="fw-semibold mb-1 text-warning">
+                  <i class="bi bi-exclamation-triangle-fill me-1"></i>Use Straight Quotes Only
+                </div>
+                <div class="text-secondary small">
+                  Always type <strong class="text-light">"</strong> (straight double-quote, ASCII 34).
+                  <br>Never use <strong class="text-danger">"</strong> or <strong class="text-danger">"</strong>
+                  (curly/smart quotes) — they will cause a JSON parse error and your signal
+                  will be rejected with HTTP 400.
+                  <br><span class="text-secondary mt-1 d-block">Tip: type the JSON manually or paste from a plain-text editor.</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Step 5 — test -->
+            <div class="d-flex gap-3 align-items-start">
+              <div class="d-flex flex-column align-items-center">
+                <div class="step-num">5</div>
               </div>
               <div>
-                <div class="fw-semibold mb-1">Alternatively: use the header</div>
-                <div class="text-secondary small">
-                  Instead of putting the token in the JSON body you can send it as an HTTP header:
+                <div class="fw-semibold mb-1">Test Before Going Live</div>
+                <div class="text-secondary small mb-2">
+                  Run this command from your terminal — replace the domain and secret — and
+                  watch the <em>Live Logs</em> panel for confirmation:
                 </div>
-                <div class="code-block mt-2">X-TV-Token: YOUR_WEBHOOK_SECRET</div>
+                <div class="code-block" style="font-size:.72rem" id="curl-example">curl -X POST https://your-domain/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-TV-Token: YOUR_SECRET" \
+  -d '{"action":"buy","symbol":"BTCUSDT","price":"65000"}'</div>
                 <div class="text-secondary small mt-2">
-                  <i class="bi bi-info-circle me-1"></i>
-                  The header takes priority over the body field when both are present.
+                  <i class="bi bi-check-circle text-success me-1"></i>
+                  Expect: <code class="text-success">&#123;"status":"success",...&#125;</code>
+                  and a new entry in Live Logs.
                 </div>
               </div>
             </div>
 
           </div><!-- /step list -->
-
-          <!-- Quick test -->
-          <hr class="border-secondary my-3">
-          <div class="fw-semibold small mb-2"><i class="bi bi-lightning-charge me-1 text-warning"></i>Quick cURL Test</div>
-          <div class="code-block" style="font-size:.72rem">curl -X POST https://your-domain/webhook \
-  -H "Content-Type: application/json" \
-  -H "X-TV-Token: YOUR_SECRET" \
-  -d '{"action":"buy","symbol":"BTCUSDT","price":"65000"}'</div>
 
         </div>
       </div>
@@ -476,12 +515,35 @@ function toggleScrollLock() {
     : '<i class="bi bi-arrow-down-circle"></i>';
 }
 
-/* ── Webhook URL auto-fill ──────────────────────────────────────────────── */
+/* ── Webhook URL auto-fill + copy ────────────────────────────────────────── */
+const _webhookUrl = window.location.origin + "/webhook";
+
 (function setWebhookUrl() {
-  const el   = document.getElementById("webhook-url");
-  const base = window.location.origin;
-  el.textContent = base + "/webhook";
+  document.getElementById("webhook-url-text").textContent = _webhookUrl;
+
+  // Update the cURL example with the real domain too
+  const curlEl = document.getElementById("curl-example");
+  if (curlEl) {
+    curlEl.textContent = `curl -X POST ${_webhookUrl} \\
+  -H "Content-Type: application/json" \\
+  -H "X-TV-Token: YOUR_SECRET" \\
+  -d '{"action":"buy","symbol":"BTCUSDT","price":"65000"}'`;
+  }
 })();
+
+function copyWebhookUrl() {
+  navigator.clipboard.writeText(_webhookUrl).then(() => {
+    const hint = document.getElementById("copy-hint");
+    hint.textContent = "✓ copied!";
+    hint.style.color = "#26a69a";
+    setTimeout(() => {
+      hint.textContent = "click to copy";
+      hint.style.color = "";
+    }, 2000);
+  }).catch(() => {
+    window.prompt("Copy this URL:", _webhookUrl);
+  });
+}
 </script>
 </body>
 </html>
