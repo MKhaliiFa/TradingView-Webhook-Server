@@ -1,0 +1,13 @@
+kind = "web"
+previewPath = "/"
+title = "Webhook Dashboard"
+version = "1.0.0"
+id = "webhook_dashboard_flask_tv"
+
+[[services]]
+localPort = 5000
+name = "Webhook Server"
+paths = ["/"]
+
+[services.development]
+run = "cd webhook_server && python main.py"
