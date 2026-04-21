@@ -46,7 +46,14 @@ class TradeError(Exception):
 # ---------------------------------------------------------------------------
 
 # Common quote currencies ordered longest-first so greedy matching works.
-_KNOWN_QUOTES = ["USDT", "USDC", "BUSD", "TUSD", "FDUSD", "BTC", "ETH", "BNB"]
+_KNOWN_QUOTES = [
+    # Stablecoins (longest first to avoid partial matches)
+    "USDT", "USDC", "BUSD", "TUSD", "FDUSD",
+    # Crypto quote currencies
+    "BTC", "ETH", "BNB",
+    # Fiat currencies
+    "USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF",
+]
 
 _SLASH_RE = re.compile(r"^[A-Z0-9]+/[A-Z0-9]+$")
 
