@@ -10,15 +10,9 @@ name = "Webhook Server"
 paths = ["/"]
 
 [services.development]
-run = "pnpm --filter @workspace/api-server run dev"
+run = "cd /home/runner/workspace/webhook_server && PORT=8080 python main.py"
 
 [services.production]
-
-[services.production.build]
-args = ["pnpm", "--filter", "@workspace/api-server", "run", "build"]
-
-[services.production.build.env]
-NODE_ENV = "production"
 
 [services.production.run]
 args = ["python", "webhook_server/main.py"]
