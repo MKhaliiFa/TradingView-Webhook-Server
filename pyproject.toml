@@ -1,10 +1,9 @@
 [project]
-name = "repl-nix-workspace"
+name = "tradingview-webhook-server"
 version = "0.1.0"
-description = "Add your description here"
+description = "TradingView -> MT5 EA bridge: receives alerts via /webhook and serves them to the EA via /get_signal."
 requires-python = ">=3.11"
 dependencies = [
-    "ccxt==4.4.71",
     "flask==3.1.1",
     "python-dotenv==1.1.0",
 ]
