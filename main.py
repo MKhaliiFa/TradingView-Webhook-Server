@@ -87,7 +87,7 @@ def _pop_signal() -> dict[str, Any] | None:
             data = json.loads(SIGNAL_FILE.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             logger.error("Corrupt signal file, discarding: %s", exc)
-            SIGNAL_FILE.unlink(missing_ok=True)
+            SIGNAL_FILE.unlink(missing_ok=True) #
             return None
         SIGNAL_FILE.unlink(missing_ok=True)
         return data
