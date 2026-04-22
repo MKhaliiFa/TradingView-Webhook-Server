@@ -1,12 +1,11 @@
-"""main.py - TradingView -> MT5 EA Bridge.
+"""main.py - TradingView -> MT5 EA Bridge with Telegram.
 
 A tiny Flask service that sits between TradingView alerts and an MT5 Expert
 Advisor. It exposes two endpoints:
 
-* POST /webhook     - receives authenticated TradingView alerts and persists
-                      the signal payload to ``signal.json``.
-* GET  /get_signal  - read endpoint polled by the EA; returns the
-                      stored signal (if any). File deletion is disabled 
+* POST /webhook     - receives authenticated TradingView alerts, persists
+                      the signal, and sends a formatted Telegram alert.
+* GET  /get_signal  - read endpoint polled by the EA. File deletion is disabled 
                       to allow multiple MT5 terminals to read the same signal.
 """
 
@@ -17,6 +16,7 @@ import json
 import logging
 import os
 import threading
+import requests  # Added for Telegram integration
 from pathlib import Path
 from typing import Any
 
@@ -52,32 +52,23 @@ logger = logging.getLogger("tv_mt5_bridge")
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
-
-# Serialises access to the signal file across Flask worker threads so a slow
-# writer cannot race a concurrent reader and hand the EA half a document.
 _signal_lock = threading.Lock()
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _secure_compare(a: str, b: str) -> bool:
-    """Constant-time string comparison for secret validation."""
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
 
-
 def _write_signal(payload: dict[str, Any]) -> None:
-    """Write the signal atomically via tmp-file + rename."""
     tmp_path = SIGNAL_FILE.with_suffix(SIGNAL_FILE.suffix + ".tmp")
     serialised = json.dumps(payload, ensure_ascii=False, indent=2)
     with _signal_lock:
         tmp_path.write_text(serialised, encoding="utf-8")
         os.replace(tmp_path, SIGNAL_FILE)
 
-
 def _pop_signal() -> dict[str, Any] | None:
-    """Read the stored signal. Deletion is disabled for multi-terminal support."""
     with _signal_lock:
         if not SIGNAL_FILE.exists():
             return None
@@ -88,14 +79,8 @@ def _pop_signal() -> dict[str, Any] | None:
             SIGNAL_FILE.unlink(missing_ok=True)
             return None
         
-        # =====================================================================
-        # FIXED: Commented out the line below so the file is NEVER deleted.
-        # This allows multiple MT5 terminals to read the same signal.
-        # =====================================================================
-        # SIGNAL_FILE.unlink(missing_ok=True) 
-        
+        # Deletion disabled for multi-terminal
         return data
-
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -103,27 +88,18 @@ def _pop_signal() -> dict[str, Any] | None:
 
 @app.route("/webhook", methods=["POST"])
 def webhook() -> Any:
-    """Receive a TradingView alert, validate its secret, and store it."""
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict):
-        logger.warning(
-            "Rejected /webhook - non-JSON body from %s", request.remote_addr
-        )
         return jsonify({"error": "Request body must be a valid JSON object."}), 400
 
-    # Accept the secret either via header (preferred) or body field.
     provided_token = (
         request.headers.get("X-TV-Token")
         or str(payload.get("token") or "")
     ).strip()
 
     if not provided_token or not _secure_compare(provided_token, WEBHOOK_SECRET):
-        logger.warning(
-            "Unauthorized /webhook attempt from %s", request.remote_addr
-        )
         return jsonify({"error": "Unauthorized: invalid or missing token."}), 401
 
-    # Strip the shared secret before persisting so it never hits disk.
     signal = {k: v for k, v in payload.items() if k != "token"}
     if not signal:
         return jsonify({"error": "Signal payload is empty."}), 400
@@ -135,19 +111,66 @@ def webhook() -> Any:
         return jsonify({"error": "Failed to store signal."}), 500
 
     logger.info("Signal stored for EA pickup: %s", signal)
+
+    # =========================================================================
+    # TELEGRAM INTEGRATION (Calculates exact SL and TP based on your strategy)
+    # =========================================================================
+    
+    TELEGRAM_TOKEN = "8741194767:AAHyyDJowkozHi3szrBgVWh2hfiO0XtW5w0"  # حط التوكن بتاعك هنا
+    CHAT_ID = "-1003940784242"           # حط الشات أي دي بتاعك هنا
+
+    if TELEGRAM_TOKEN != "YOUR_BOT_TOKEN":
+        action_type = signal.get("action", "").upper()
+        symbol_name = signal.get("symbol", "UNKNOWN")
+        
+        try:
+            entry_price = float(signal.get("price", 0.0))
+        except (ValueError, TypeError):
+            entry_price = 0.0
+
+        sl_price = 0.0
+        tp_price = 0.0
+
+        # Calculate exact SL (100 pips = $10) and TP (200 pips = $20) for Gold
+        if entry_price > 0:
+            if action_type == "BUY":
+                sl_price = entry_price - 10.0
+                tp_price = entry_price + 20.0
+            elif action_type == "SELL":
+                sl_price = entry_price + 10.0
+                tp_price = entry_price - 20.0
+
+            # Formatting a clean, professional message using HTML
+            tg_message = (
+                f"🚨 <b>New {action_type} Signal!</b> 🚨\n\n"
+                f"💎 <b>Symbol:</b> {symbol_name}\n"
+                f"🎯 <b>Entry Price:</b> {entry_price:.2f}\n"
+                f"🛑 <b>Stop Loss:</b> {sl_price:.2f}\n"
+                f"✅ <b>Take Profit:</b> {tp_price:.2f}\n\n"
+                f"⚡ <i>Auto-executed on MT5</i>"
+            )
+        else:
+            tg_message = f"🚨 <b>New {action_type} Signal!</b>\n💎 <b>Symbol:</b> {symbol_name}\n⚡ <i>Market Execution</i>"
+
+        tg_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        try:
+            requests.post(tg_url, json={"chat_id": CHAT_ID, "text": tg_message, "parse_mode": "HTML"}, timeout=5)
+        except Exception as e:
+            logger.error("Failed to send Telegram message: %s", e)
+
+    # =========================================================================
+
     return jsonify({"status": "ok", "stored": True}), 200
 
 
 @app.route("/get_signal", methods=["GET"])
 def get_signal() -> Any:
-    """Return the stored signal (if any) and keep it for multi-terminal delivery."""
     signal = _pop_signal()
     if signal is None:
         return jsonify({"status": "empty", "signal": None}), 200
 
     logger.info("Signal dispatched to EA: %s", signal)
     return jsonify({"status": "ok", "signal": signal}), 200
-
 
 # ---------------------------------------------------------------------------
 # Error handlers
@@ -157,17 +180,10 @@ def get_signal() -> Any:
 def _not_found(_: Exception) -> Any:
     return jsonify({"error": "Not found."}), 404
 
-
 @app.errorhandler(405)
 def _method_not_allowed(_: Exception) -> Any:
     return jsonify({"error": "Method not allowed."}), 405
 
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
-    logger.info("Starting TradingView -> MT5 bridge on 0.0.0.0:%d", port)
     app.run(host="0.0.0.0", port=port, debug=False)
