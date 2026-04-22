@@ -5,11 +5,9 @@ Advisor. It exposes two endpoints:
 
 * POST /webhook     - receives authenticated TradingView alerts and persists
                       the signal payload to ``signal.json``.
-* GET  /get_signal  - read-and-clear endpoint polled by the EA; returns the
-                      stored signal (if any) and removes it so each signal
-                      is delivered exactly once.
-
-The bridge does no trade execution of its own. Execution is the EA's job.
+* GET  /get_signal  - read endpoint polled by the EA; returns the
+                      stored signal (if any). File deletion is disabled 
+                      to allow multiple MT5 terminals to read the same signal.
 """
 
 from __future__ import annotations
@@ -79,7 +77,7 @@ def _write_signal(payload: dict[str, Any]) -> None:
 
 
 def _pop_signal() -> dict[str, Any] | None:
-    """Read the stored signal and delete the file in one critical section."""
+    """Read the stored signal. Deletion is disabled for multi-terminal support."""
     with _signal_lock:
         if not SIGNAL_FILE.exists():
             return None
@@ -87,9 +85,15 @@ def _pop_signal() -> dict[str, Any] | None:
             data = json.loads(SIGNAL_FILE.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             logger.error("Corrupt signal file, discarding: %s", exc)
-            SIGNAL_FILE.unlink(missing_ok=True) #
+            SIGNAL_FILE.unlink(missing_ok=True)
             return None
-        SIGNAL_FILE.unlink(missing_ok=True)
+        
+        # =====================================================================
+        # FIXED: Commented out the line below so the file is NEVER deleted.
+        # This allows multiple MT5 terminals to read the same signal.
+        # =====================================================================
+        # SIGNAL_FILE.unlink(missing_ok=True) 
+        
         return data
 
 
@@ -136,7 +140,7 @@ def webhook() -> Any:
 
 @app.route("/get_signal", methods=["GET"])
 def get_signal() -> Any:
-    """Return the stored signal (if any) and clear it for exactly-once delivery."""
+    """Return the stored signal (if any) and keep it for multi-terminal delivery."""
     signal = _pop_signal()
     if signal is None:
         return jsonify({"status": "empty", "signal": None}), 200
