@@ -1,6 +1,6 @@
 <div align="center">
 
-# TradingView → MT5 Bridge
+# SNPR MT5 Bridge
 
 **A lightweight Flask micro-service that turns TradingView alerts into live MetaTrader 5 trades — with instant Telegram notifications.**
 
@@ -134,8 +134,8 @@ All runtime configuration is done via **environment variables**:
 
 ```bash
 # 1. Clone
-git clone https://github.com/MKhaliiFa/TradingView-Webhook-Server.git
-cd TradingView-Webhook-Server
+git clone https://github.com/MKhaliiFa/SNPR-MT5-Bridge.git
+cd SNPR-MT5-Bridge
 
 # 2. Install
 python -m venv .venv
@@ -200,7 +200,7 @@ Paste this into the alert **message** field:
 ## Project Structure
 
 ```
-TradingView-Listener-2/
+SNPR-MT5-Bridge/
 ├── main.py             # Flask app — webhook, signal store, Telegram push
 ├── requirements.txt    # Flask · gunicorn · requests
 ├── pyproject.toml      # Project metadata

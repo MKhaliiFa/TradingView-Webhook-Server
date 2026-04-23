@@ -158,7 +158,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tradingview-webhook-server"
+name = "snpr-mt5-bridge"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
