@@ -134,8 +134,8 @@ All runtime configuration is done via **environment variables**:
 
 ```bash
 # 1. Clone
-git clone https://github.com/<your-user>/TradingView-Listener-2.git
-cd TradingView-Listener-2
+git clone https://github.com/MKhaliiFa/TradingView-Webhook-Server.git
+cd TradingView-Webhook-Server
 
 # 2. Install
 python -m venv .venv
