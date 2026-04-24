@@ -16,7 +16,7 @@ import json
 import logging
 import os
 import threading
-import requests  # Added for Telegram integration
+import requests  
 from pathlib import Path
 from typing import Any
 
@@ -113,11 +113,11 @@ def webhook() -> Any:
     logger.info("Signal stored for EA pickup: %s", signal)
 
     # =========================================================================
-    # TELEGRAM INTEGRATION (Calculates exact SL and TP based on your strategy)
+    # TELEGRAM INTEGRATION (Reads exact SL and TP from TradingView JSON)
     # =========================================================================
     
-    TELEGRAM_TOKEN = "8741194767:AAHyyDJowkozHi3szrBgVWh2hfiO0XtW5w0"  # حط التوكن بتاعك هنا
-    CHAT_ID = "-1003940784242"           # حط الشات أي دي بتاعك هنا
+    TELEGRAM_TOKEN = "8741194767:AAHyyDJowkozHi3szrBgVWh2hfiO0XtW5w0"  
+    CHAT_ID = "-1003940784242"            
 
     if TELEGRAM_TOKEN != "YOUR_BOT_TOKEN":
         action_type = signal.get("action", "").upper()
@@ -125,25 +125,19 @@ def webhook() -> Any:
         
         try:
             entry_price = float(signal.get("price", 0.0))
+            # هنا التليجرام هيسحب الأرقام الذكية اللي محسوبة في TradingView
+            sl_price = float(signal.get("sl", 0.0))
+            tp_price = float(signal.get("tp", 0.0))
+            lot_size = float(signal.get("lot", 0.04))
         except (ValueError, TypeError):
-            entry_price = 0.0
+            entry_price = sl_price = tp_price = 0.0
+            lot_size = 0.04
 
-        sl_price = 0.0
-        tp_price = 0.0
-
-        # Calculate exact SL (100 pips = $10) and TP (200 pips = $20) for Gold
         if entry_price > 0:
-            if action_type == "BUY":
-                sl_price = entry_price - 10.0
-                tp_price = entry_price + 20.0
-            elif action_type == "SELL":
-                sl_price = entry_price + 10.0
-                tp_price = entry_price - 20.0
-
-            # Formatting a clean, professional message using HTML
             tg_message = (
                 f"🚨 <b>New {action_type} Signal!</b> 🚨\n\n"
                 f"💎 <b>Symbol:</b> {symbol_name}\n"
+                f"📦 <b>Lot Size:</b> {lot_size}\n"
                 f"🎯 <b>Entry Price:</b> {entry_price:.2f}\n"
                 f"🛑 <b>Stop Loss:</b> {sl_price:.2f}\n"
                 f"✅ <b>Take Profit:</b> {tp_price:.2f}\n\n"
